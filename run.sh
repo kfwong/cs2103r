@@ -8,23 +8,59 @@ outfile=$2
 echo "# Dump File" > "$outfile"
 echo "This is a dumpfile for testing." >> "$outfile"
 
+# count number of files
+total_number_of_files=$(git ls-files | grep -v ".png" | grep -v "jpg" | grep -v ".pptx" | grep -v ".jar" | wc -l)
+
+# number of files analyzed so far
+current_file_counter=1
+
 # list all tracked files, filter binary files not suitable to be blamed
-git ls-files | grep -v ".png" | grep -v "jpg" | grep -v ".pptx" |
+git ls-files | grep -v ".png" | grep -v "jpg" | grep -v ".pptx" | grep -v ".jar" |
+while read in; do
 
-while read in; do 
-	
-	# for each line, grep the line edited by the specified author
-	output=$(git --no-pager blame -M -C -w "$in" | grep "$author")
+	is_printing_code=false;
+	output=$(git --no-pager blame -M -C -w --line-porcelain "$in")
 
-	if [ -z "$output" ]; then
-		# if the file has no edit, output to console
-		echo "no edit found in $in"
-	else
-		# if the file has at least some edits, append to file
-		echo "## $in" >> "$outfile"
-		echo "\`\`\`" >> "$outfile"
-		echo "$output" >>  "$outfile"
-		echo "\`\`\`" >> "$outfile"
-	fi
+	echo "Analyzing $in ... ($current_file_counter/$total_number_of_files)"
 
+	# append file title
+	echo "## $in" >> "$outfile"
+
+	# append code start
+	echo "\`\`\`" >> "$outfile"
+	printf '%s\n' "$output" | 
+	while IFS= read -r line; do
+		# skipping irrelevant metadata
+		if [[ $line =~ [0-9a-f]{40}.* ]]; then continue; fi
+		if [[ $line =~ committer.* ]]; then continue; fi
+		if [[ $line =~ author-.* ]]; then continue; fi
+		if [[ $line =~ summary.* ]]; then continue; fi
+		if [[ $line =~ filename.* ]]; then continue; fi
+		if [[ $line =~ boundary.* ]]; then continue; fi
+
+		# if the line is written by the speficified author,
+		# set the flag to true, ignore the current author line but print the actual code in next iteration
+		if [[ $line =~ author[[:space:]].* ]]; then
+			line_author=$(echo "$line" | sed 's/author //')
+
+			if [[ $line_author == $author ]]; then
+				is_printing_code=true;
+			fi
+
+			continue
+		fi
+
+		if [[ $is_printing_code == true ]]; then
+			printf '%s\n' "$line" | sed 's/\t//' >> "$outfile"
+			is_printing_code=false
+		fi
+		
+	done 
+
+	# append code end
+	echo "\`\`\`" >> "$outfile"
+
+	current_file_counter=$((current_file_counter+1))
 done
+
+echo "Done!"
